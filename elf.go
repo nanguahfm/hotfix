@@ -34,7 +34,8 @@ var (
 
 var(
 	HOTFIX_MAP = map[string]map[string]string{}
-
+	PATCH_MAP = map[string]*gomonkey.Patches{}
+	HOTFIX_CURR_PACKET = "gamefix"
 )
 
 var(
@@ -62,13 +63,21 @@ func GetHotName(name string) (string, string) {
 }
 func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, safe bool) (string, error) {
 	logger = logger.With(zap.Namespace("hotfix"))
-	s, e := hotfix(logger, path, names, variadic, safe)
+	pathso := path
+	if !strings.HasSuffix(pathso, ".so"){
+		pathso += ".so"
+	}
+	for _, elem := range names{
+		ResetPatch(logger, elem)
+	}
+	s, e := hotfix(logger, pathso, names, variadic, safe)
 	if e == nil{
 		HOTFIX_MAP[path] = make(map[string]string)
 		for _, name := range names{
 			hot, _ := GetHotName(name)
 			HOTFIX_MAP[path][name] = hot
 		}
+		HOTFIX_CURR_PACKET = HOTFIX_PACKET
 	}
 	return s, e
 }
@@ -182,7 +191,7 @@ func hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 		for i, elem := range names{
 			logger.Warn("monkeyPatch ", zap.Any("elem", elem), zap.Any(fmt.Sprintf("%X", oldFunctions[i].Pointer()),fmt.Sprintf("%X", newFunctions[i].Pointer())) )
 		}
-		monkeyPatch(oldFunctions, newFunctions)
+		monkeyPatch(oldFunctions, newFunctions, names)
 		
 	}else{
 		ret, err := patch(path, names, dwarf.BI(), oldFunctionEntrys, newFunctions)
@@ -255,9 +264,18 @@ func patch(path string, names []string, bi *proc.BinaryInfo, oldFunctions []*pro
 	return output.String(), nil
 }
 
-func monkeyPatch(oldFunctions []reflect.Value, newFunctions []reflect.Value) {
+func monkeyPatch(oldFunctions []reflect.Value, newFunctions []reflect.Value, names []string) {
 	for i := 0; i < len(oldFunctions); i++ {
-		gomonkey.ApplyFunc(oldFunctions[i].Interface(), newFunctions[i].Interface())
+		patch := gomonkey.ApplyFunc(oldFunctions[i].Interface(), newFunctions[i].Interface())
+		PATCH_MAP[names[i]] = patch
+	}
+}
+
+func ResetPatch(logger *zap.Logger, patch string){
+	v, ok := PATCH_MAP[patch]
+	if ok{
+		logger.Warn("ResetPatch", zap.Any("", patch))
+		v.Reset()
 	}
 }
 
