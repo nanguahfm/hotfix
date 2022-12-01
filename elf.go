@@ -10,11 +10,10 @@ import (
 	"plugin"
 	"reflect"
 	"sync"
+	"time"
 	"unsafe"
 
 	"strings"
-
-	
 
 	"github.com/agiledragon/gomonkey"
 	"github.com/go-delve/delve/pkg/proc"
@@ -35,7 +34,9 @@ var (
 var(
 	HOTFIX_MAP = map[string]map[string]string{}
 	PATCH_MAP = map[string]*gomonkey.Patches{}
-	HOTFIX_CURR_PACKET = "gamefix"
+	HOTFIX_LOAD_PACKETS = map[string]string{}
+
+
 )
 
 var(
@@ -77,7 +78,7 @@ func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 			hot, _ := GetHotName(name)
 			HOTFIX_MAP[path][name] = hot
 		}
-		HOTFIX_CURR_PACKET = HOTFIX_PACKET
+		HOTFIX_LOAD_PACKETS[HOTFIX_PACKET] = time.Now().UTC().String()
 	}
 	return s, e
 }
