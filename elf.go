@@ -277,6 +277,7 @@ func ResetPatch(logger *zap.Logger, patch string){
 	if ok{
 		logger.Warn("ResetPatch", zap.Any("", patch))
 		v.Reset()
+		delete(PATCH_MAP, patch)
 		for k, _ := range HOTFIX_MAP{
 			_, ok := HOTFIX_MAP[k][patch]
 			if ok{
