@@ -42,6 +42,11 @@ var(
 )
 
 func GetHotName(name string) (string, string) {
+	if strings.Contains(name, "(*"){
+		name = strings.Replace(name, "(*", "(*HF_", 1)
+	}else{
+		name = strings.Replace(name, "(", "(HF_", 1)
+	}
 	vec := strings.Split(name, "/")
 	raw := vec[1]
 	{
