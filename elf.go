@@ -18,11 +18,17 @@ import (
 	"github.com/agiledragon/gomonkey"
 	"github.com/go-delve/delve/pkg/proc"
 	"go.uber.org/zap"
+	"syscall"
 )
 
 const (
 	HOTFIX_FAIL = "HOTFIX_FAIL"
 	HOTFIX_OK   = "HOTFIX_OK"
+
+
+	HOT_MONKRY = 1
+	HOT_HFMKRY = 2
+	HOT_TRACE = 3
 )
 
 var (
@@ -30,6 +36,17 @@ var (
 	TRACER_PATH   = "./tracer"
 	HOTFIX_PREFIX = "HF_"
 )
+type  HotFuncData struct{
+	From map[string]reflect.Value
+	To map[string]reflect.Value
+	BackUP2 map[string][]byte
+	Entrys map[string]*proc.Function
+	NewUP2 map[string][]byte
+
+	BackUP1 map[string][]byte
+	NewUP1 map[string][]byte
+	Patch map[string]int
+}
 
 var(
 	HOTFIX_MAP = map[string]map[string]string{}
@@ -37,6 +54,11 @@ var(
 	HOTFIX_LOAD_PACKETS = map[string]string{}
 
 
+	HOTFIX_FUNC_DATA =  map[string]*HotFuncData{}
+	HOT_MIN_CODE_SIZE= 0
+)
+var(
+	BK_Instruction = []byte{}
 )
 
 var(
@@ -62,28 +84,36 @@ func GetHotName(name string) (string, string) {
 	hotName := strings.Join(vec, "/")
 	return hotName, raw
 }
-func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, safe bool) (string, error) {
+func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, safe int) (string, error) {
 	logger = logger.With(zap.Namespace("hotfix"))
 	pathso := path
 	if !strings.HasSuffix(pathso, ".so"){
 		pathso += ".so"
 	}
 	for _, elem := range names{
-		ResetPatch(logger, elem)
+		ResetPatch(logger, elem, pathso)
 	}
-	s, e := hotfix(logger, pathso, names, variadic, safe)
-	if e == nil{
-		HOTFIX_MAP[path] = make(map[string]string)
-		for _, name := range names{
-			hot, _ := GetHotName(name)
-			HOTFIX_MAP[path][name] = hot
-		}
-		HOTFIX_LOAD_PACKETS[HOTFIX_PACKET] = time.Now().UTC().String()
+	s, e := hotfix1(logger, pathso, names, variadic)
+	if e != nil{
+		return s, e
 	}
+	if safe <= 0{
+		return s, e
+	}
+	ok := hotfix2(logger, pathso, names, safe)
+	if !ok{
+		return "hotfix2_fail", fmt.Errorf("hotfix2_fail")
+	}
+	HOTFIX_MAP[path] = make(map[string]string)
+	for _, name := range names{
+		hot, _ := GetHotName(name)
+		HOTFIX_MAP[path][name] = hot + fmt.Sprintf("@%v",safe)
+	}
+	HOTFIX_LOAD_PACKETS[HOTFIX_PACKET] = time.Now().UTC().String()
 	return s, e
 }
 
-func hotfix(logger *zap.Logger, path string, names []string, variadic []bool, safe bool) (string, error) {
+func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (string, error) {
 	dwarf, err := NewDwarfRT("")
 	logger.Warn("hotfix_DwarfRT1")
 	if err != nil {
@@ -187,19 +217,43 @@ func hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 			return HOTFIX_FAIL, fmt.Errorf("jump_code error %s", names[i])
 		}
 	}
-
-	if !safe {
-		for i, elem := range names{
-			logger.Warn("monkeyPatch ", zap.Any("elem", elem), zap.Any(fmt.Sprintf("%X", oldFunctions[i].Pointer()),fmt.Sprintf("%X", newFunctions[i].Pointer())) )
+	BK_Instruction = dwarf.BI().Arch.BreakpointInstruction()
+	for i, name := range names{
+		_, ok := HOTFIX_FUNC_DATA[path]
+		if !ok{
+			HOTFIX_FUNC_DATA[path] = &HotFuncData{
+				From:   map[string]reflect.Value{},
+				To:     map[string]reflect.Value{},
+				BackUP2: map[string][]byte{},
+				Entrys: map[string]*proc.Function{},
+				NewUP2:  map[string]*proc.Function{},
+				
+				BackUP1: map[string][]byte{},
+				NewUP1:  map[string]*proc.Function{},
+				Patch: map[string]int{},
+			}
 		}
-		monkeyPatch(oldFunctions, newFunctions, names)
-		
-	}else{
-		ret, err := patch(path, names, dwarf.BI(), oldFunctionEntrys, newFunctions)
-		if err != nil{
-			return ret, err
+		v := HOTFIX_FUNC_DATA[path]
+		from := oldFunctions[i]
+		to := newFunctions[i]
+		v.From[name] = from
+		hotName, _ := GetHotName(name)
+		v.To[hotName] = to
+		{
+			code := buildJmpRelative(from.Pointer(), to.Pointer(), HOT_MIN_CODE_SIZE)
+			bak := BackInstruction(from.Pointer(), code)
+			v.BackUP2[name] = bak
+			v.NewUP2[name] = code
+		}
+		{
+			code := buildJmpDirective(from.Pointer())
+			bak := BackInstruction(from.Pointer(), code)
+			v.BackUP1[name] = bak
+			v.NewUP1[name] = code
 		}
 	}
+
+
 	{
 		GetSoCommitId, err := p.Lookup("GetSoCommitId")
 		if err == nil {
@@ -214,6 +268,61 @@ func hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 	
 }
 
+func hotfix2(logger *zap.Logger, path string, names []string, safe int)bool{
+	v, ok := HOTFIX_FUNC_DATA[path]
+	if !ok{
+		logger.Warn("hotfix2", zap.Any(path, safe))
+		return false
+	}
+	oldFunctions := []reflect.Value{}
+	newFunctions := []reflect.Value{}
+	oldFunctionEntrys := []*proc.Function{}
+	for _, elem := range names{
+		from, ok1 := v.From[elem]
+		hotName, _ := GetHotName(elem)
+		to, ok2 := v.To[hotName]
+		entry, ok3 := v.Entrys[elem]
+		if !ok1 || !ok2 || ok3{
+			logger.Error("hotfix2", zap.Any("elem", hotName) )
+			return false
+		}
+		oldFunctions = append(oldFunctions, from)
+		newFunctions = append(newFunctions, to)
+		oldFunctionEntrys = append(oldFunctionEntrys, entry)
+	}
+	for i, elem := range names{
+		logger.Warn("hotfix2", zap.Any("elem", elem), zap.Any(fmt.Sprintf("%X", oldFunctions[i].Pointer()),fmt.Sprintf("%X", newFunctions[i].Pointer())) )
+	}
+
+	if safe == HOT_MONKRY {
+		monkeyPatch(oldFunctions, newFunctions, names)
+	}
+	if safe == HOT_HFMKRY{
+		for _, name := range names{
+			hotName, _ := GetHotName(name)
+			to := v.To[hotName]
+			code := v.NewUP2[hotName]
+			ok := CopyInstruction(to.Pointer(), code)
+			if !ok{
+				return false
+			}
+		}
+	}
+	if safe == HOT_TRACE{
+
+		ret, err := patch(path, names,  oldFunctionEntrys, newFunctions)
+		if err != nil{
+			logger.Warn("hotfix2", zap.Any("ret", ret), zap.Error(err) )
+			return false
+		}
+	}
+	for _, name := range names{
+		v.Patch[name] = safe
+	}
+	return false
+}
+
+
 type TracerParam struct {
 	Pid                   int
 	Path                  string
@@ -226,12 +335,102 @@ type TracerParam struct {
 var patchFuncMutex sync.Mutex
 var patchFuncs []reflect.Value
 
-func patch(path string, names []string, bi *proc.BinaryInfo, oldFunctions []*proc.Function, newFunctions []reflect.Value) (string, error) {
+
+func getPageAddr(ptr uintptr) uintptr {
+	return ptr & ^(uintptr(syscall.Getpagesize() - 1))
+}
+func makeSliceFromPointer(p uintptr, length int) []byte {
+	return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		Data: p,
+		Len:  length,
+		Cap:  length,
+	}))
+}
+func setPageWritable(addr uintptr, length int, prot int) {
+	pageSize := syscall.Getpagesize()
+	for p := getPageAddr(addr); p < addr+uintptr(length); p += uintptr(pageSize) {
+		page := makeSliceFromPointer(p, pageSize)
+		err := syscall.Mprotect(page, prot)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func CopyInstruction(location uintptr, data []byte)bool{
+	f := makeSliceFromPointer(location, len(data))
+	setPageWritable(location, len(data), syscall.PROT_READ|syscall.PROT_WRITE|syscall.PROT_EXEC)
+	sz := copy(f, data[:])
+	setPageWritable(location, len(data), syscall.PROT_READ|syscall.PROT_EXEC)
+	if sz != len(data) {
+		fmt.Println("copy instruction to target failed")
+		return false
+	}
+	return true
+}
+
+func BackInstruction(location uintptr, data []byte)[]byte{
+	bytes := entryAddress(location, len(data))
+	original := make([]byte, len(bytes))
+	copy(original, bytes)
+	return original
+}
+
+
+
+func buildJmpRelative(from, to uintptr, minJmpCodeSize int) []byte{
+	var code []byte
+	delta := int64(from - to)
+	if unsafe.Sizeof(uintptr(0)) == unsafe.Sizeof(int32(0)) {
+		delta = int64(int32(from - to))
+	}
+	
+	relative := (delta <= 0x7fffffff)
+	if delta < 0 {
+		delta = -delta
+		relative = (delta <= 0x80000000)
+	}
+	
+	
+	if relative {
+		var dis uint32
+		if to > from {
+			dis = uint32(int32(to-from) - 5)
+		} else {
+			dis = uint32(-int32(from-to) - 5)
+		}
+		code = []byte{
+			0xe9,
+				byte(dis),
+				byte(dis >> 8),
+				byte(dis >> 16),
+				byte(dis >> 24),
+		}
+	}else{
+		return code
+	}
+	sz := len(code)
+	if minJmpCodeSize > 0 && sz < minJmpCodeSize {
+		nop := make([]byte, 0, minJmpCodeSize-sz)
+		for {
+			if len(nop) >= minJmpCodeSize-sz {
+				break
+			}
+			nop = append(nop, 0x90)
+		}
+		code = append(code, nop...)
+	}
+	return code
+}
+
+
+
+func patch(path string, names []string,  oldFunctions []*proc.Function, newFunctions []reflect.Value) (string, error) {
 	param := TracerParam{
 		Pid:                   os.Getpid(),
 		Path:                  path,
 		Names:                 names,
-		BreakpointInstruction: bi.Arch.BreakpointInstruction(),
+		BreakpointInstruction: BK_Instruction,
 	}
 
 	for i := 0; i < len(oldFunctions); i++ {
@@ -272,7 +471,7 @@ func monkeyPatch(oldFunctions []reflect.Value, newFunctions []reflect.Value, nam
 	}
 }
 
-func ResetPatch(logger *zap.Logger, patch string){
+func ResetPatch(logger *zap.Logger, patch string, so string){
 	v, ok := PATCH_MAP[patch]
 	if ok{
 		logger.Warn("ResetPatch", zap.Any("", patch))
@@ -284,6 +483,23 @@ func ResetPatch(logger *zap.Logger, patch string){
 				delete(HOTFIX_MAP[k], patch)
 			}
 		}
+	}
+	{
+		v, ok := HOTFIX_FUNC_DATA[so]
+		if ok{
+			name := patch
+			hot := v.Patch[patch]
+			if hot != HOT_HFMKRY{
+				return
+			}
+			from := v.From[name]
+			code := v.BackUP2[name]
+			ok1 := CopyInstruction(from.Pointer(), code)
+			if ok1{
+				v.Patch[name] = 0
+			}
+		}
+
 	}
 }
 
