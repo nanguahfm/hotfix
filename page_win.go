@@ -1,3 +1,4 @@
+// +build windows
 package hotfix
 
 func setPageWritable(addr uintptr, length int, prot int) {
