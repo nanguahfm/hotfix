@@ -46,6 +46,9 @@ type  HotFuncData struct{
 	BackUP1 map[string][]byte
 	NewUP1 map[string][]byte
 	Patch map[string]int
+
+	ADDR map[string]string
+
 }
 
 var(
@@ -231,6 +234,7 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 				BackUP1: map[string][]byte{},
 				NewUP1:  map[string][]byte{},
 				Patch: map[string]int{},
+				ADDR: map[string]string{},
 			}
 		}
 		v := HOTFIX_FUNC_DATA[path]
@@ -246,11 +250,13 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 			v.NewUP2[name] = code
 		}
 		{
-			code := buildJmpDirective(from.Pointer())
+			code := buildJmpDirective(to.Pointer())
 			bak := BackInstruction(from.Pointer(), code)
 			v.BackUP1[name] = bak
 			v.NewUP1[name] = code
 		}
+		v.ADDR[hotName] = fmt.Sprintf("%X", to.Pointer())
+		v.ADDR[name] = fmt.Sprintf("%X", from.Pointer())
 	}
 
 
