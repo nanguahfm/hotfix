@@ -75,3 +75,7 @@ func CreateFuncForCodePtr(ftyp reflect.Type, codePtr uint64) reflect.Value {
 	funcPtr.codePtr = uintptr(codePtr)
 	return newFuncVal
 }
+
+
+
+

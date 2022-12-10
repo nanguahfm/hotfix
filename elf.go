@@ -18,7 +18,7 @@ import (
 	"github.com/agiledragon/gomonkey"
 	"github.com/go-delve/delve/pkg/proc"
 	"go.uber.org/zap"
-	"syscall"
+
 )
 
 const (
@@ -226,10 +226,10 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 				To:     map[string]reflect.Value{},
 				BackUP2: map[string][]byte{},
 				Entrys: map[string]*proc.Function{},
-				NewUP2:  map[string]*proc.Function{},
+				NewUP2:  map[string][]byte{},
 				
 				BackUP1: map[string][]byte{},
-				NewUP1:  map[string]*proc.Function{},
+				NewUP1:  map[string][]byte{},
 				Patch: map[string]int{},
 			}
 		}
@@ -336,38 +336,8 @@ var patchFuncMutex sync.Mutex
 var patchFuncs []reflect.Value
 
 
-func getPageAddr(ptr uintptr) uintptr {
-	return ptr & ^(uintptr(syscall.Getpagesize() - 1))
-}
-func makeSliceFromPointer(p uintptr, length int) []byte {
-	return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
-		Data: p,
-		Len:  length,
-		Cap:  length,
-	}))
-}
-func setPageWritable(addr uintptr, length int, prot int) {
-	pageSize := syscall.Getpagesize()
-	for p := getPageAddr(addr); p < addr+uintptr(length); p += uintptr(pageSize) {
-		page := makeSliceFromPointer(p, pageSize)
-		err := syscall.Mprotect(page, prot)
-		if err != nil {
-			panic(err)
-		}
-	}
-}
 
-func CopyInstruction(location uintptr, data []byte)bool{
-	f := makeSliceFromPointer(location, len(data))
-	setPageWritable(location, len(data), syscall.PROT_READ|syscall.PROT_WRITE|syscall.PROT_EXEC)
-	sz := copy(f, data[:])
-	setPageWritable(location, len(data), syscall.PROT_READ|syscall.PROT_EXEC)
-	if sz != len(data) {
-		fmt.Println("copy instruction to target failed")
-		return false
-	}
-	return true
-}
+
 
 func BackInstruction(location uintptr, data []byte)[]byte{
 	bytes := entryAddress(location, len(data))
