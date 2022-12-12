@@ -93,19 +93,17 @@ func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 	if !strings.HasSuffix(pathso, ".so"){
 		pathso += ".so"
 	}
+
+	if safe <= 0{
+		s, e := hotfix1(logger, pathso, names, variadic)	
+		return s, e
+	}
 	for _, elem := range names{
 		ResetPatch(logger, elem, pathso)
 	}
-	s, e := hotfix1(logger, pathso, names, variadic)
+	s, e := hotfix2(logger, pathso, names, safe)
 	if e != nil{
 		return s, e
-	}
-	if safe <= 0{
-		return s, e
-	}
-	ok := hotfix2(logger, pathso, names, safe)
-	if !ok{
-		return "hotfix2_fail", fmt.Errorf("hotfix2_fail")
 	}
 	HOTFIX_MAP[path] = make(map[string]string)
 	for _, name := range names{
@@ -274,11 +272,11 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 	
 }
 
-func hotfix2(logger *zap.Logger, path string, names []string, safe int)bool{
+func hotfix2(logger *zap.Logger, path string, names []string, safe int)(string, error){
 	v, ok := HOTFIX_FUNC_DATA[path]
 	if !ok{
 		logger.Warn("hotfix2", zap.Any(path, safe))
-		return false
+		return "hotfixsofalil", fmt.Errorf("hotfixsofalil")
 	}
 	oldFunctions := []reflect.Value{}
 	newFunctions := []reflect.Value{}
@@ -290,7 +288,7 @@ func hotfix2(logger *zap.Logger, path string, names []string, safe int)bool{
 		entry, ok3 := v.Entrys[elem]
 		if !ok1 || !ok2 || ok3{
 			logger.Error("hotfix2", zap.Any("elem", hotName) )
-			return false
+			return "hotfixfuncfalil", fmt.Errorf("hotfixfuncfalil %v", elem)
 		}
 		oldFunctions = append(oldFunctions, from)
 		newFunctions = append(newFunctions, to)
@@ -310,7 +308,7 @@ func hotfix2(logger *zap.Logger, path string, names []string, safe int)bool{
 			code := v.NewUP2[hotName]
 			ok := CopyInstruction(to.Pointer(), code)
 			if !ok{
-				return false
+				return "hotfixfunc", fmt.Errorf("hotfixfunc %v", name)
 			}
 		}
 	}
@@ -319,13 +317,13 @@ func hotfix2(logger *zap.Logger, path string, names []string, safe int)bool{
 		ret, err := patch(path, names,  oldFunctionEntrys, newFunctions)
 		if err != nil{
 			logger.Warn("hotfix2", zap.Any("ret", ret), zap.Error(err) )
-			return false
+			return ret, err
 		}
 	}
 	for _, name := range names{
 		v.Patch[name] = safe
 	}
-	return false
+	return "OK", nil
 }
 
 
