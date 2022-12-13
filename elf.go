@@ -304,9 +304,9 @@ func hotfix2(logger *zap.Logger, path string, names []string, safe int)(string, 
 	if safe == HOT_HFMKRY{
 		for _, name := range names{
 			hotName, _ := GetHotName(name)
-			to := v.To[hotName]
+			from := v.From[name]
 			code := v.NewUP2[hotName]
-			ok := CopyInstruction(to.Pointer(), code)
+			ok := CopyInstruction(from.Pointer(), code)
 			if !ok{
 				return "hotfixfunc", fmt.Errorf("hotfixfunc %v", name)
 			}
