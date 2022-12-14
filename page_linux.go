@@ -32,6 +32,7 @@ func setPageWritable(addr uintptr, length int, prot int) {
 }
 
 func CopyInstruction(location uintptr, data []byte)bool{
+	fmt.Println("CopyInstruction")
 	f := makeSliceFromPointer(location, len(data))
 	setPageWritable(location, len(data), syscall.PROT_READ|syscall.PROT_WRITE|syscall.PROT_EXEC)
 	sz := copy(f, data[:])

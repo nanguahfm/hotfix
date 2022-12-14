@@ -42,7 +42,8 @@ type  HotFuncData struct{
 	BackUP2 map[string][]byte
 	Entrys map[string]*proc.Function
 	NewUP2 map[string][]byte
-
+	ProbeCode map[string][]byte
+	ProbeFunc map[string]string
 	BackUP1 map[string][]byte
 	NewUP1 map[string][]byte
 	Patch map[string]int
@@ -135,6 +136,14 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 		}
 		oldFunctionEntrys = append(oldFunctionEntrys, entry)
 	}
+	for i := 1; i<= 10; i += 1{
+		key := fmt.Sprintf("server/server.Probe%v", i)
+		entry, err := dwarf.FindFuncEntry(key)
+		if err == nil{
+			logger.Warn("dwarf.FindFuncEntry", zap.Any(key, fmt.Sprintf("%X", entry.Entry)) )
+		}
+	}
+
 	logger.Warn("hotfix_DwarfRT2")
 	p, err := plugin.Open(path)
 	if err != nil {
@@ -211,6 +220,8 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 		oldFunctions = append(oldFunctions, oldFunc)
 	}
 
+
+
 	for i := 0; i < len(oldFunctionEntrys); i++ {
 		jumpCode := buildJmpDirective(0)
 		if (oldFunctionEntrys[i].End - oldFunctionEntrys[i].Entry) < uint64(len(jumpCode)) {
@@ -233,6 +244,8 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 				NewUP1:  map[string][]byte{},
 				Patch: map[string]int{},
 				ADDR: map[string]string{},
+				ProbeCode : map[string][]byte{},
+				ProbeFunc : map[string]string{},
 			}
 		}
 		v := HOTFIX_FUNC_DATA[path]
@@ -242,10 +255,25 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 		hotName, _ := GetHotName(name)
 		v.To[hotName] = to
 		{
-			code := buildJmpRelative(from.Pointer(), to.Pointer(), HOT_MIN_CODE_SIZE)
-			bak := BackInstruction(from.Pointer(), code)
-			v.BackUP2[name] = bak
-			v.NewUP2[name] = code
+			probe := GetFreeProbe()
+			if probe != nil{
+				code := buildJmpRelative(from.Pointer(), probe.Point, HOT_MIN_CODE_SIZE)
+				logger.Warn(name,  zap.Any("size", from.Pointer() -  probe.Point),  zap.Any("code", len(code)) )
+				bak := BackInstruction(from.Pointer(), code)
+				v.BackUP2[name] = bak
+				v.NewUP2[name] = code
+
+				code1 := buildJmpDirective(to.Pointer())
+				codex := []byte{0x90,0x90}
+				codex = append(codex, code1...)
+				codex = append(codex, []byte{0x90,0x90,0x90,0x90,0x90,0x90}...)
+				v.ProbeCode[name] = codex
+				v.ProbeFunc[name] = probe.Name
+				v.NewUP2[probe.Name] = codex
+				v.ADDR[probe.Name] = fmt.Sprintf("%X", probe.Point)
+			}
+
+
 		}
 		{
 			code := buildJmpDirective(to.Pointer())
@@ -253,6 +281,7 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 			v.BackUP1[name] = bak
 			v.NewUP1[name] = code
 		}
+
 		v.ADDR[hotName] = fmt.Sprintf("%X", to.Pointer())
 		v.ADDR[name] = fmt.Sprintf("%X", from.Pointer())
 	}
@@ -303,13 +332,29 @@ func hotfix2(logger *zap.Logger, path string, names []string, safe int)(string, 
 	}
 	if safe == HOT_HFMKRY{
 		for _, name := range names{
-			hotName, _ := GetHotName(name)
 			from := v.From[name]
-			code := v.NewUP2[hotName]
-			ok := CopyInstruction(from.Pointer(), code)
-			if !ok{
+			code := v.NewUP2[name]
+			logger.Warn("HOT_HFMKRY", zap.Any("name", name), zap.Any(fmt.Sprintf("%X", from.Pointer()), len(code)) )
+			if len(code) <= 0{
 				return "hotfixfunc", fmt.Errorf("hotfixfunc %v", name)
 			}
+			{
+				code1 := v.ProbeCode[name]
+				p := GetProbe(v.ProbeFunc[name])
+				if p == nil || len(code1) == 0{
+					return "hotfixfunc0", fmt.Errorf("hotfixfunc0 %v %v", name, len(code1))
+				}
+				ok := CopyInstruction(p.Point, code1)
+				if !ok{
+					return "hotfixfunc1", fmt.Errorf("hotfixfunc1 %v", name)
+				}
+				p.Bind = name
+			}
+			ok := CopyInstruction(from.Pointer(), code)
+			if !ok{
+				return "hotfixfunc2", fmt.Errorf("hotfixfunc2 %v", name)
+			}
+
 		}
 	}
 	if safe == HOT_TRACE{
