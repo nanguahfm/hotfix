@@ -143,9 +143,14 @@ func init() {
     Probe8()
     Probe9()
     RegisterProbe(1, Probe1)
-    for _, v := range PROBE_MAP{
-        fmt.Printf("PROBE:%v:%x \n", v.Name, v.Point)
-    }
+    RegisterProbe(2, Probe2)
+    RegisterProbe(3, Probe3)
+    RegisterProbe(4, Probe4)
+    RegisterProbe(5, Probe5)
+    RegisterProbe(6, Probe6)
+    RegisterProbe(7, Probe7)
+    RegisterProbe(8, Probe8)
+    RegisterProbe(9, Probe9)
 
 }
 func RegisterProbe(id int, in interface{}){

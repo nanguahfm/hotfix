@@ -60,6 +60,8 @@ var(
 
 	HOTFIX_FUNC_DATA =  map[string]*HotFuncData{}
 	HOT_MIN_CODE_SIZE= 0
+
+	PLUGIN_MAP =  map[string]*plugin.Plugin{}
 )
 var(
 	BK_Instruction = []byte{}
@@ -96,7 +98,15 @@ func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 	}
 
 	if safe <= 0{
-		s, e := hotfix1(logger, pathso, names, variadic)	
+		s, e := hotfix1(logger, pathso, names, variadic)
+		if e == nil{
+			HOTFIX_MAP[path] = make(map[string]string)
+			for _, name := range names{
+				hot, _ := GetHotName(name)
+				HOTFIX_MAP[path][name] = hot + fmt.Sprintf("@%v",safe)
+			}
+			HOTFIX_LOAD_PACKETS[HOTFIX_PACKET] = time.Now().UTC().String()
+		}	
 		return s, e
 	}
 	for _, elem := range names{
@@ -106,14 +116,30 @@ func Hotfix(logger *zap.Logger, path string, names []string, variadic []bool, sa
 	if e != nil{
 		return s, e
 	}
-	HOTFIX_MAP[path] = make(map[string]string)
 	for _, name := range names{
 		hot, _ := GetHotName(name)
 		HOTFIX_MAP[path][name] = hot + fmt.Sprintf("@%v",safe)
 	}
-	HOTFIX_LOAD_PACKETS[HOTFIX_PACKET] = time.Now().UTC().String()
 	return s, e
 }
+
+func RunHotfixFunc(path string, fix int32)error{
+	p, ok := PLUGIN_MAP[path]
+	if !ok{
+		return fmt.Errorf("not found plugin: %s ", path)
+	}
+	name := fmt.Sprintf("HotfixFunc%v", fix)
+	HotfixFuncType, err := p.Lookup(name)
+	if err != nil{
+		return err
+	}
+	hotfixTypeFn, ok := HotfixFuncType.(func()error)
+	if !ok {
+		return fmt.Errorf("HotfixFuncType: %s ", name)
+	}
+	return hotfixTypeFn()
+}
+
 
 func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (string, error) {
 	dwarf, err := NewDwarfRT("")
@@ -137,8 +163,8 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 		oldFunctionEntrys = append(oldFunctionEntrys, entry)
 	}
 	for i := 1; i<= 10; i += 1{
-		key := fmt.Sprintf("server/server.Probe%v", i)
-		entry, err := dwarf.FindFuncEntry(key)
+		key := fmt.Sprintf("Probe%v", i)
+		entry, err := dwarf.FindFuncEntry("github.com/nanguahfm/hotfix." + key)
 		if err == nil{
 			logger.Warn("dwarf.FindFuncEntry", zap.Any(key, fmt.Sprintf("%X", entry.Entry)) )
 		}
@@ -149,6 +175,7 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 	if err != nil {
 		return HOTFIX_FAIL, err
 	}
+	PLUGIN_MAP[path] = p
 	logger.Warn("hotfix_DwarfRT3")
 	lib, addr, err := dwarf.SearchPluginByName(path)
 	logger.Warn("hotfix_DwarfRT4")
