@@ -263,14 +263,16 @@ func hotfix1(logger *zap.Logger, path string, names []string, variadic []bool) (
 				v.BackUP2[name] = bak
 				v.NewUP2[name] = code
 
-				code1 := buildJmpDirective(to.Pointer())
-				codex := []byte{0x90,0x90}
+				code1 := buildJmp64Relative(to.Pointer())
+				codex := []byte{0x90,0x90,0x90,0x90}
 				codex = append(codex, code1...)
-				codex = append(codex, []byte{0x90,0x90,0x90,0x90,0x90,0x90}...)
+				codex = append(codex, []byte{0x90,0x90,0x90,0x90}...)
 				v.ProbeCode[name] = codex
 				v.ProbeFunc[name] = probe.Name
 				v.NewUP2[probe.Name] = codex
+				v.BackUP2[probe.Name] = BackInstruction(probe.Point, codex)
 				v.ADDR[probe.Name] = fmt.Sprintf("%X", probe.Point)
+
 			}
 
 
@@ -438,6 +440,22 @@ func buildJmpRelative(from, to uintptr, minJmpCodeSize int) []byte{
 			nop = append(nop, 0x90)
 		}
 		code = append(code, nop...)
+	}
+	return code
+}
+
+
+
+
+
+func buildJmp64Relative(to uintptr)[]byte{
+	code := []byte{
+		0x68, //push
+		byte(to), byte(to >> 8), byte(to >> 16), byte(to >> 24),
+		0xc7, 0x44, 0x24, // mov $value, 4%rsp
+		0x04, // rsp + 4
+		byte(to >> 32), byte(to >> 40), byte(to >> 48), byte(to >> 56),
+		0xc3, // retn
 	}
 	return code
 }
